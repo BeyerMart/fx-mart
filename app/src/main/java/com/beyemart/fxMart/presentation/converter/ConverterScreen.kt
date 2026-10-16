@@ -1,6 +1,10 @@
 package com.beyemart.fxMart.presentation.converter
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
@@ -9,8 +13,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.beyemart.fxMart.domain.model.Currency
 import com.beyemart.fxMart.domain.model.SortOrder
@@ -83,6 +94,7 @@ fun ConverterScreen(
                 selectedCurrency = state.fromCurrency,
                 currencies = state.currencies,
                 sortOrder = state.sortOrder,
+                menuSide = DropdownMenuSide.START,
                 onCurrencySelected = { viewModel.onFromCurrencyChange(it) },
                 onToggleFavorite = { viewModel.onToggleFavorite(it) },
                 modifier = Modifier.weight(1f)
@@ -100,6 +112,7 @@ fun ConverterScreen(
                 selectedCurrency = state.toCurrency,
                 currencies = state.currencies,
                 sortOrder = state.sortOrder,
+                menuSide = DropdownMenuSide.END,
                 onCurrencySelected = { viewModel.onToCurrencyChange(it) },
                 onToggleFavorite = { viewModel.onToggleFavorite(it) },
                 modifier = Modifier.weight(1f)
@@ -155,23 +168,31 @@ fun ConverterScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (chartState.isLoading) {
-            CircularProgressIndicator(modifier = Modifier.padding(top = 16.dp))
-        } else if (chartState.historicalRates.isNotEmpty()) {
-            CurrencyChart(
-                historicalRates = chartState.historicalRates,
-                base = chartState.base,
-                target = chartState.target,
-                amount = chartState.amount
-            )
-        } else {
-            chartState.error?.let { chartError ->
-                StaleDataBanner(
-                    message = chartError,
-                    isError = !chartState.isUsingCachedData,
-                    onRetry = chartViewModel::retry,
-                    modifier = Modifier.padding(top = 16.dp),
+        if (chartState.historicalRates.isNotEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                CurrencyChart(
+                    historicalRates = chartState.historicalRates,
+                    base = chartState.base,
+                    target = chartState.target,
+                    amount = chartState.amount
                 )
+
+                if (chartState.isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                }
+            }
+        } else {
+            if (chartState.isLoading) {
+                CircularProgressIndicator(modifier = Modifier.padding(top = 16.dp))
+            } else {
+                chartState.error?.let { chartError ->
+                    StaleDataBanner(
+                        message = chartError,
+                        isError = !chartState.isUsingCachedData,
+                        onRetry = chartViewModel::retry,
+                        modifier = Modifier.padding(top = 16.dp),
+                    )
+                }
             }
         }
 
@@ -197,107 +218,151 @@ fun CurrencyDropdown(
     selectedCurrency: Currency?,
     currencies: List<Currency>,
     sortOrder: SortOrder,
+    menuSide: DropdownMenuSide,
     onCurrencySelected: (Currency) -> Unit,
     onToggleFavorite: (Currency) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    val comparator = remember(sortOrder) {
-        when (sortOrder) {
-            SortOrder.ALPHABETICAL -> compareBy<Currency> { it.code }
-            SortOrder.LATEST_USED -> compareByDescending<Currency> { it.lastUsedTime }.thenBy { it.code }
-        }
+    val sections = remember(currencies, sortOrder) {
+        buildCurrencyDropdownSections(currencies, sortOrder)
     }
+    val popupPositionProvider = remember(menuSide) { DropdownPositionProvider(menuSide) }
 
-    val favorites = remember(currencies, sortOrder) {
-        currencies.filter { it.isFavorite }.sortedWith(comparator)
-    }
-    val allCurrencies = remember(currencies, sortOrder) {
-        currencies.sortedWith(comparator)
-    }
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
-        modifier = modifier
-    ) {
+    Box(modifier = modifier) {
         OutlinedTextField(
             value = selectedCurrency?.code ?: "",
             onValueChange = {},
             readOnly = true,
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
+            modifier = Modifier.fillMaxWidth()
         )
 
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
-            if (favorites.isNotEmpty()) {
-                DropdownMenuItem(
-                    text = { Text("Favorites", color = MaterialTheme.colorScheme.primary) },
-                    onClick = {},
-                    enabled = false,
-                )
-                favorites.forEach { currency ->
-                    DropdownMenuItem(
-                        text = {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(currency.displayLabel(), modifier = Modifier.weight(1f))
-                                IconButton(onClick = { onToggleFavorite(currency) }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Favorite,
-                                        contentDescription = "Unfavorite",
-                                        tint = MaterialTheme.colorScheme.primary
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clickable { expanded = true }
+        )
+
+        if (expanded) {
+            Popup(
+                popupPositionProvider = popupPositionProvider,
+                onDismissRequest = { expanded = false },
+                properties = PopupProperties(focusable = true),
+            ) {
+                Surface(
+                    modifier = Modifier.width(320.dp),
+                    shape = MaterialTheme.shapes.medium,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    shadowElevation = 8.dp,
+                    color = MaterialTheme.colorScheme.surface,
+                ) {
+                    if (sections.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .padding(16.dp)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("No currencies available")
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.heightIn(max = 360.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            sections.forEachIndexed { index, section ->
+                                item(key = "${section.title}-header") {
+                                    Text(
+                                        text = section.title,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                     )
                                 }
+
+                                items(section.currencies, key = { it.code }) { currency ->
+                                    CurrencyDropdownMenuItem(
+                                        currency = currency,
+                                        onCurrencySelected = {
+                                            onCurrencySelected(it)
+                                            expanded = false
+                                        },
+                                        onToggleFavorite = onToggleFavorite,
+                                    )
+                                }
+
+                                if (index < sections.lastIndex) {
+                                    item(key = "${section.title}-divider") {
+                                        HorizontalDivider(
+                                            modifier = Modifier.padding(top = 4.dp),
+                                            color = MaterialTheme.colorScheme.outlineVariant,
+                                        )
+                                    }
+                                }
                             }
-                        },
-                        onClick = {
-                            onCurrencySelected(currency)
-                            expanded = false
                         }
-                    )
+                    }
                 }
-                HorizontalDivider()
+            }
+        }
+    }
+}
+
+enum class DropdownMenuSide {
+    START,
+    END,
+}
+
+@Composable
+private fun CurrencyDropdownMenuItem(
+    currency: Currency,
+    onCurrencySelected: (Currency) -> Unit,
+    onToggleFavorite: (Currency) -> Unit,
+) {
+    Card(
+        onClick = { onCurrencySelected(currency) },
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = currency.code,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = currency.displayLabel(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
-            DropdownMenuItem(
-                text = { Text("All currencies", color = MaterialTheme.colorScheme.primary) },
-                onClick = {},
-                enabled = false,
-            )
-            allCurrencies.forEach { currency ->
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(currency.displayLabel(), modifier = Modifier.weight(1f))
-                            IconButton(onClick = { onToggleFavorite(currency) }) {
-                                Icon(
-                                    imageVector = Icons.Default.Favorite,
-                                    contentDescription = if (currency.isFavorite) "Unfavorite" else "Favorite",
-                                    tint = if (currency.isFavorite) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.outline
-                                    },
-                                )
-                            }
-                        }
+            IconButton(onClick = { onToggleFavorite(currency) }) {
+                Icon(
+                    imageVector = Icons.Default.Favorite,
+                    contentDescription = if (currency.isFavorite) {
+                        "Unfavorite"
+                    } else {
+                        "Favorite"
                     },
-                    onClick = {
-                        onCurrencySelected(currency)
-                        expanded = false
+                    tint = if (currency.isFavorite) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outline
                     },
                 )
             }
@@ -339,3 +404,34 @@ private fun StaleDataBanner(
         }
     }
 }
+
+private class DropdownPositionProvider(
+    private val side: DropdownMenuSide,
+) : PopupPositionProvider {
+
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        val availableY = (windowSize.height - popupContentSize.height).coerceAtLeast(0)
+        val x = when (side) {
+            DropdownMenuSide.START -> {
+                val leftX = anchorBounds.right - popupContentSize.width
+                if (leftX >= 0) leftX else 0
+            }
+            DropdownMenuSide.END -> {
+                val rightX = anchorBounds.left
+                if (rightX + popupContentSize.width <= windowSize.width) {
+                    rightX
+                } else {
+                    (windowSize.width - popupContentSize.width).coerceAtLeast(0)
+                }
+            }
+        }
+        val y = (anchorBounds.bottom + 8).coerceAtMost(availableY)
+        return IntOffset(x, y)
+    }
+}
+
