@@ -1,4 +1,4 @@
-# FxMart
+# fx-mart
 
 FX exchange app.
 
