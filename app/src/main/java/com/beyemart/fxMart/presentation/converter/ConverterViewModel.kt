@@ -3,10 +3,8 @@ package com.beyemart.fxMart.presentation.converter
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.beyemart.fxMart.domain.model.Currency
-import com.beyemart.fxMart.domain.repository.LatestRatesLoadResult
 import com.beyemart.fxMart.domain.repository.CurrencyRepository
 import com.beyemart.fxMart.util.normalizeAmountInput
-import com.beyemart.fxMart.util.formatMoneyWithGrouping
 import com.beyemart.fxMart.util.Resource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -43,6 +41,9 @@ class ConverterViewModel @Inject constructor(
                         _state.update { state ->
                             val currentFrom = currencies.find { it.code == state.fromCurrency?.code }
                             val currentTo = currencies.find { it.code == state.toCurrency?.code }
+                            val currentSecond = currencies.find {
+                                it.code == state.toSecondCurrency?.code
+                            }
 
                             val from = currentFrom
                                 ?: currencies.find { c -> c.code == "USD" }
@@ -58,6 +59,12 @@ class ConverterViewModel @Inject constructor(
                                 sortOrder = sortOrder,
                                 fromCurrency = from,
                                 toCurrency = to,
+                                toSecondCurrency = chooseDefaultSecondTarget(
+                                    currencies = currencies,
+                                    fromCurrency = from,
+                                    primaryTargetCurrency = to,
+                                    currentSecondCurrency = currentSecond,
+                                ),
                                 isLoading = false
                             )
                         }
@@ -90,7 +97,17 @@ class ConverterViewModel @Inject constructor(
         viewModelScope.launch {
             repository.updateLastUsed(currency.code)
         }
-        _state.update { it.copy(fromCurrency = currency) }
+        _state.update { currentState ->
+            val updatedState = currentState.copy(fromCurrency = currency)
+            updatedState.copy(
+                toSecondCurrency = chooseDefaultSecondTarget(
+                    currencies = updatedState.currencies,
+                    fromCurrency = updatedState.fromCurrency,
+                    primaryTargetCurrency = updatedState.toCurrency,
+                    currentSecondCurrency = updatedState.toSecondCurrency,
+                ),
+            )
+        }
         convert()
     }
 
@@ -98,7 +115,34 @@ class ConverterViewModel @Inject constructor(
         viewModelScope.launch {
             repository.updateLastUsed(currency.code)
         }
-        _state.update { it.copy(toCurrency = currency) }
+        _state.update { currentState ->
+            val updatedState = currentState.copy(toCurrency = currency)
+            updatedState.copy(
+                toSecondCurrency = chooseDefaultSecondTarget(
+                    currencies = updatedState.currencies,
+                    fromCurrency = updatedState.fromCurrency,
+                    primaryTargetCurrency = updatedState.toCurrency,
+                    currentSecondCurrency = updatedState.toSecondCurrency,
+                ),
+            )
+        }
+        convert()
+    }
+
+    fun onToSecondCurrencyChange(currency: Currency) {
+        viewModelScope.launch {
+            repository.updateLastUsed(currency.code)
+        }
+        _state.update { currentState ->
+            currentState.copy(
+                toSecondCurrency = chooseDefaultSecondTarget(
+                    currencies = currentState.currencies,
+                    fromCurrency = currentState.fromCurrency,
+                    primaryTargetCurrency = currentState.toCurrency,
+                    currentSecondCurrency = currency,
+                ),
+            )
+        }
         convert()
     }
 
@@ -109,11 +153,19 @@ class ConverterViewModel @Inject constructor(
     }
 
     fun onSwapCurrencies() {
-        _state.update {
-            it.copy(
-                fromCurrency = it.toCurrency,
-                toCurrency = it.fromCurrency,
+        _state.update { currentState ->
+            val swappedState = currentState.copy(
+                fromCurrency = currentState.toCurrency,
+                toCurrency = currentState.fromCurrency,
                 error = null,
+            )
+            swappedState.copy(
+                toSecondCurrency = chooseDefaultSecondTarget(
+                    currencies = swappedState.currencies,
+                    fromCurrency = swappedState.fromCurrency,
+                    primaryTargetCurrency = swappedState.toCurrency,
+                    currentSecondCurrency = swappedState.toSecondCurrency,
+                ),
             )
         }
         convert()
@@ -126,7 +178,11 @@ class ConverterViewModel @Inject constructor(
     private fun convert() {
         val currentState = _state.value
         val from = currentState.fromCurrency?.code ?: return
-        val to = currentState.toCurrency?.code ?: return
+        currentState.toCurrency?.code ?: return
+        val selectedTargets = resolveSelectedTargets(
+            primaryCurrency = currentState.toCurrency,
+            secondaryCurrency = currentState.toSecondCurrency,
+        )
         val amount = parseAmount(currentState.amount)
         val amountValidationError = validateAmount(currentState.amount)
 
@@ -134,6 +190,7 @@ class ConverterViewModel @Inject constructor(
             _state.update {
                 it.copy(
                     convertedAmount = "",
+                    convertedSecondAmount = "",
                     amountInputError = amountValidationError,
                     isLoading = false,
                     isUsingCachedRate = false,
@@ -148,6 +205,7 @@ class ConverterViewModel @Inject constructor(
             _state.update {
                 it.copy(
                     convertedAmount = "0.00",
+                    convertedSecondAmount = "0.00",
                     amountInputError = null,
                     error = null,
                     isLoading = false,
@@ -162,16 +220,20 @@ class ConverterViewModel @Inject constructor(
                 when (result) {
                     is Resource.Success -> {
                         val latestRates = result.data ?: return@collect
-                        val rate = resolveRate(latestRates, from, to)
+                        val targetRates = resolveTargetRates(
+                            latestRates = latestRates,
+                            fromCode = from,
+                            targets = selectedTargets,
+                        )
 
-                        if (rate == 0.0) {
-                            fetchEurCrossRate(from, to, amountStr)
+                        if (targetRates == null) {
+                            fetchEurCrossRates(from, selectedTargets, amountStr)
                             return@collect
                         }
 
-                        updateConvertedAmount(
+                        updateConvertedAmounts(
                             amount = amountStr,
-                            rate = rate,
+                            targetRates = targetRates,
                             referenceDate = latestRates.exchangeRate.date,
                             isStale = latestRates.isStale,
                         )
@@ -179,11 +241,15 @@ class ConverterViewModel @Inject constructor(
                     is Resource.Error -> {
                         val latestRates = result.data
                         if (latestRates != null) {
-                            val rate = resolveRate(latestRates, from, to)
-                            if (rate > 0.0) {
-                                updateConvertedAmount(
+                            val targetRates = resolveTargetRates(
+                                latestRates = latestRates,
+                                fromCode = from,
+                                targets = selectedTargets,
+                            )
+                            if (targetRates != null) {
+                                updateConvertedAmounts(
                                     amount = amountStr,
-                                    rate = rate,
+                                    targetRates = targetRates,
                                     referenceDate = latestRates.exchangeRate.date,
                                     isStale = true,
                                     error = result.message,
@@ -193,7 +259,7 @@ class ConverterViewModel @Inject constructor(
                         }
 
                         if (from != "EUR") {
-                            fetchEurCrossRate(from, to, amountStr)
+                            fetchEurCrossRates(from, selectedTargets, amountStr)
                         } else {
                             _state.update {
                                 it.copy(
@@ -212,18 +278,35 @@ class ConverterViewModel @Inject constructor(
         }
     }
 
-    private suspend fun fetchEurCrossRate(from: String, to: String, amountStr: Double) {
+    private suspend fun fetchEurCrossRates(
+        from: String,
+        targets: List<SelectedConversionTarget>,
+        amountStr: Double,
+    ) {
         repository.getLatestRates("EUR").collect { result ->
             when (result) {
                 is Resource.Success -> {
                     val latestRates = result.data ?: return@collect
-                    val rates = latestRates.exchangeRate.rates
-                    val rateFrom = if (from == "EUR") 1.0 else rates[from] ?: 0.0
-                    val rateTo = if (to == "EUR") 1.0 else rates[to] ?: 0.0
-                    val rate = if (rateFrom > 0.0 && rateTo > 0.0) rateTo / rateFrom else 0.0
-                    updateConvertedAmount(
+                    val targetRates = resolveTargetRates(
+                        latestRates = latestRates,
+                        fromCode = from,
+                        targets = targets,
+                    )
+
+                    if (targetRates == null) {
+                        _state.update {
+                            it.copy(
+                                error = "Unable to resolve exchange rate for the selected currencies",
+                                isLoading = false,
+                                isUsingCachedRate = latestRates.isStale,
+                            )
+                        }
+                        return@collect
+                    }
+
+                    updateConvertedAmounts(
                         amount = amountStr,
-                        rate = rate,
+                        targetRates = targetRates,
                         referenceDate = latestRates.exchangeRate.date,
                         isStale = latestRates.isStale,
                     )
@@ -231,14 +314,16 @@ class ConverterViewModel @Inject constructor(
                 is Resource.Error -> {
                     val latestRates = result.data
                     if (latestRates != null) {
-                        val rates = latestRates.exchangeRate.rates
-                        val rateFrom = if (from == "EUR") 1.0 else rates[from] ?: 0.0
-                        val rateTo = if (to == "EUR") 1.0 else rates[to] ?: 0.0
-                        val rate = if (rateFrom > 0.0 && rateTo > 0.0) rateTo / rateFrom else 0.0
-                        if (rate > 0.0) {
-                            updateConvertedAmount(
+                        val targetRates = resolveTargetRates(
+                            latestRates = latestRates,
+                            fromCode = from,
+                            targets = targets,
+                        )
+
+                        if (targetRates != null) {
+                            updateConvertedAmounts(
                                 amount = amountStr,
-                                rate = rate,
+                                targetRates = targetRates,
                                 referenceDate = latestRates.exchangeRate.date,
                                 isStale = true,
                                 error = result.message,
@@ -255,33 +340,21 @@ class ConverterViewModel @Inject constructor(
         }
     }
 
-    private fun resolveRate(latestRates: LatestRatesLoadResult, from: String, to: String): Double {
-        val rates = latestRates.exchangeRate.rates
-        var rate = if (from == to) 1.0 else rates[to] ?: 0.0
-
-        if (rate == 0.0) {
-            val baseCode = latestRates.exchangeRate.base
-            val rateFrom = if (from == baseCode) 1.0 else rates[from] ?: 0.0
-            val rateTo = if (to == baseCode) 1.0 else rates[to] ?: 0.0
-            if (rateFrom > 0.0 && rateTo > 0.0) {
-                rate = rateTo / rateFrom
-            }
-        }
-
-        return rate
-    }
-
-    private fun updateConvertedAmount(
+    private fun updateConvertedAmounts(
         amount: Double,
-        rate: Double,
+        targetRates: Map<ConversionTargetSlot, Double>,
         referenceDate: java.time.LocalDate,
         isStale: Boolean,
         error: String? = null,
     ) {
-        val converted = amount * rate
+        val convertedAmounts = formatConvertedAmounts(
+            amount = amount,
+            targetRates = targetRates,
+        )
         _state.update {
             it.copy(
-                convertedAmount = formatMoneyWithGrouping(converted),
+                convertedAmount = convertedAmounts.primaryAmount,
+                convertedSecondAmount = convertedAmounts.secondaryAmount,
                 isLoading = false,
                 error = error,
                 amountInputError = null,

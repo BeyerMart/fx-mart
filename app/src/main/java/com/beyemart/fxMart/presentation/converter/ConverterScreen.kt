@@ -5,7 +5,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.SwapVert
@@ -13,11 +15,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
@@ -27,6 +30,7 @@ import com.beyemart.fxMart.domain.model.Currency
 import com.beyemart.fxMart.domain.model.SortOrder
 import com.beyemart.fxMart.domain.model.displayLabel
 import com.beyemart.fxMart.presentation.chart.ChartViewModel
+import com.beyemart.fxMart.presentation.chart.ComparisonCurrencyChart
 import com.beyemart.fxMart.presentation.chart.CurrencyChart
 import com.beyemart.fxMart.presentation.chart.TimeframeSelector
 import com.beyemart.fxMart.util.AmountInputVisualTransformation
@@ -40,6 +44,8 @@ fun ConverterScreen(
     val state by viewModel.state.collectAsState()
     val chartViewModel: ChartViewModel = hiltViewModel()
     val chartState by chartViewModel.state.collectAsState()
+    val scrollState = rememberScrollState()
+    val isWideLayout = LocalConfiguration.current.screenWidthDp >= 700
 
     LaunchedEffect(state.fromCurrency?.code, state.toCurrency?.code, state.amount) {
         val from = state.fromCurrency?.code ?: return@LaunchedEffect
@@ -49,12 +55,28 @@ fun ConverterScreen(
         chartViewModel.onAmountChanged(amount)
     }
 
+    LaunchedEffect(
+        isWideLayout,
+        state.toSecondCurrency?.code,
+        state.fromCurrency?.code,
+        state.toCurrency?.code,
+    ) {
+        val secondCurrency = state.toSecondCurrency
+        if (isWideLayout && secondCurrency != null) {
+            chartViewModel.onComparisonTargetSelected(secondCurrency)
+        } else {
+            chartViewModel.clearComparisonTarget()
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .verticalScroll(scrollState)
+            .padding(16.dp)
+            .widthIn(max = 720.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.Top
     ) {
         Text(
             text = "Currency Converter",
@@ -117,6 +139,19 @@ fun ConverterScreen(
                 onToggleFavorite = { viewModel.onToggleFavorite(it) },
                 modifier = Modifier.weight(1f)
             )
+
+            if (isWideLayout) {
+                CurrencyDropdown(
+                    label = "To2",
+                    selectedCurrency = state.toSecondCurrency,
+                    currencies = state.currencies,
+                    sortOrder = state.sortOrder,
+                    menuSide = DropdownMenuSide.SECOND_END,
+                    onCurrencySelected = { viewModel.onToSecondCurrencyChange(it) },
+                    onToggleFavorite = { viewModel.onToggleFavorite(it) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -127,26 +162,48 @@ fun ConverterScreen(
                 containerColor = MaterialTheme.colorScheme.primaryContainer
             )
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "Converted Amount",
-                    style = MaterialTheme.typography.labelLarge
-                )
-                Text(
-                    text = "${state.convertedAmount} ${state.toCurrency?.code ?: ""}",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-
-                state.lastUpdatedDate?.let { referenceDate ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     Text(
-                        text = "Reference date: ${referenceDate.format(DateTimeFormatter.ISO_DATE)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                        text = "Converted Amount",
+                        style = MaterialTheme.typography.labelLarge
                     )
+                    Text(
+                        text = "${state.convertedAmount} ${state.toCurrency?.code ?: ""}",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+
+                    state.lastUpdatedDate?.let { referenceDate ->
+                        Text(
+                            text = "Reference date: ${referenceDate.format(DateTimeFormatter.ISO_DATE)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                        )
+                    }
+                }
+                if (isWideLayout && state.toSecondCurrency != null) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Second Converted Amount",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        Text(
+                            text = "${state.convertedSecondAmount} ${state.toSecondCurrency?.code ?: ""}",
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
                 }
             }
         }
@@ -170,12 +227,24 @@ fun ConverterScreen(
 
         if (chartState.historicalRates.isNotEmpty()) {
             Box(modifier = Modifier.fillMaxWidth()) {
-                CurrencyChart(
-                    historicalRates = chartState.historicalRates,
-                    base = chartState.base,
-                    target = chartState.target,
-                    amount = chartState.amount
-                )
+                val comparisonTarget = chartState.comparisonTarget
+                if (comparisonTarget != null && chartState.comparisonHistoricalRates.isNotEmpty()) {
+                    ComparisonCurrencyChart(
+                        primaryHistoricalRates = chartState.historicalRates,
+                        comparisonHistoricalRates = chartState.comparisonHistoricalRates,
+                        base = chartState.base,
+                        primaryTarget = chartState.target,
+                        comparisonTarget = comparisonTarget,
+                        amount = chartState.amount,
+                    )
+                } else {
+                    CurrencyChart(
+                        historicalRates = chartState.historicalRates,
+                        base = chartState.base,
+                        target = chartState.target,
+                        amount = chartState.amount
+                    )
+                }
 
                 if (chartState.isLoading) {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
@@ -280,7 +349,10 @@ fun CurrencyDropdown(
                                         text = section.title,
                                         style = MaterialTheme.typography.labelLarge,
                                         color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        modifier = Modifier.padding(
+                                            horizontal = 8.dp,
+                                            vertical = 4.dp
+                                        ),
                                     )
                                 }
 
@@ -315,6 +387,7 @@ fun CurrencyDropdown(
 enum class DropdownMenuSide {
     START,
     END,
+    SECOND_END,
 }
 
 @Composable
@@ -418,20 +491,23 @@ private class DropdownPositionProvider(
         val availableY = (windowSize.height - popupContentSize.height).coerceAtLeast(0)
         val x = when (side) {
             DropdownMenuSide.START -> {
-                val leftX = anchorBounds.right - popupContentSize.width
-                if (leftX >= 0) leftX else 0
-            }
-            DropdownMenuSide.END -> {
-                val rightX = anchorBounds.left
-                if (rightX + popupContentSize.width <= windowSize.width) {
-                    rightX
+                val leftX = anchorBounds.left
+                if (leftX + popupContentSize.width <= windowSize.width) {
+                    leftX.coerceAtLeast(0)
                 } else {
                     (windowSize.width - popupContentSize.width).coerceAtLeast(0)
                 }
+            }
+            DropdownMenuSide.END -> {
+                val centerX = anchorBounds.left + (anchorBounds.width - popupContentSize.width) / 2
+                centerX.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
+            }
+            DropdownMenuSide.SECOND_END -> {
+                val rightX = anchorBounds.right - popupContentSize.width
+                rightX.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
             }
         }
         val y = (anchorBounds.bottom + 8).coerceAtMost(availableY)
         return IntOffset(x, y)
     }
 }
-

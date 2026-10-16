@@ -1,0 +1,5 @@
+<resources>
+
+    <style name="Theme.fx_mart" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
+</resources>
+

@@ -1,5 +1,6 @@
 package com.beyemart.fxMart.presentation.chart
 
+import com.beyemart.fxMart.domain.model.Currency
 import com.beyemart.fxMart.domain.model.HistoricalRate
 import java.time.LocalDate
 
@@ -8,8 +9,13 @@ data class ChartState(
     val target: String = "",
     val timeframe: Timeframe = Timeframe.DAYS_30,
     val historicalRates: List<HistoricalRate> = emptyList(),
+    val comparisonTarget: String? = null,
+    val comparisonHistoricalRates: List<HistoricalRate> = emptyList(),
+    val availableCurrencies: List<Currency> = emptyList(),
     val isLoading: Boolean = false,
+    val isComparisonLoading: Boolean = false,
     val error: String? = null,
+    val comparisonError: String? = null,
     val amount: Double = 1.0,
     val isUsingCachedData: Boolean = false,
 )

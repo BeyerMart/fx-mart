@@ -4,7 +4,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
@@ -35,7 +37,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            FxMartTheme {
+            FxMartTheme(darkTheme = true) {
                 BeyeApp()
             }
         }
@@ -85,6 +87,7 @@ fun BeyeApp() {
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             if (!isExpanded) {
                 BeyeBottomBar(
@@ -93,16 +96,22 @@ fun BeyeApp() {
             }
         }
     ) { innerPadding ->
-        Row(modifier = Modifier.padding(innerPadding)) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
             if (isExpanded) {
                 BeyeNavRail(
                     currentRoute = navigationState.topLevelRoute
                 ) { navigator.navigate(it) }
             }
             
-            NavDisplay(
-                entries = navigationState.toEntries(entryProvider)
-            ) { navigator.goBack() }
+            Box(modifier = Modifier.weight(1f).fillMaxSize()) {
+                NavDisplay(
+                    entries = navigationState.toEntries(entryProvider)
+                ) { navigator.goBack() }
+            }
         }
     }
 }
@@ -135,7 +144,9 @@ fun BeyeNavRail(
     currentRoute: NavKey,
     onNavigate: (NavKey) -> Unit
 ) {
-    NavigationRail {
+    NavigationRail(
+        containerColor = MaterialTheme.colorScheme.background,
+    ) {
         val items = listOf(
             NavigationItem("Converter", ConverterRoute, Icons.Default.SwapHoriz),
             NavigationItem("Watchlist", WatchlistRoute, Icons.AutoMirrored.Filled.List),
