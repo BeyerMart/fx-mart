@@ -122,7 +122,7 @@ The manifest is Android's application descriptor. It declares:
 
 The `MAIN` and `LAUNCHER` intent filter tells Android that `MainActivity` is the first visible screen.
 
-### [BeyeApplication.kt](../app/src/main/java/com/beyemart/fxMart/FxMartApplication.kt)
+### [FxMartApplication.kt](../app/src/main/java/com/beyemart/fxMart/FxMartApplication.kt)
 
 `FxMartApplication` is created before the Activity. `@HiltAndroidApp` enables Hilt dependency injection for the application.
 
@@ -230,7 +230,7 @@ GET /2026-08-01..2026-08-14?from=USD&to=EUR
 
 Moshi DTO for the API's current or single-date JSON response. DTO means Data Transfer Object: it matches the external JSON shape.
 
-### [HistoricalRatesDto.kt](../app/src/main/java/com/beyemart/fxMart/data/remote/dto/HistoricalRatesDto.kt)
+### [AlphaVantageDto.kt](../app/src/main/java/com/beyemart/fxMart/data/remote/dto/AlphaVantageDto.kt)
 
 Moshi DTO for a date-range response. Its nested rates map is organized as date, then currency symbol, then numeric rate.
 
